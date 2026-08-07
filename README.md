@@ -1,19 +1,26 @@
 # Steam Live Players Overlay
 
 A tiny, zero-install overlay that shows a game's **current concurrent Steam player count**
-as a clean widget you can drop into OBS / Streamlabs as a Browser Source. Defaults to
-**No Man's Sky**, but works for **any Steam game** via a single flag.
+on screen. Defaults to **No Man's Sky**, but works for **any Steam game** via a single flag.
 
 No API key. No pip / npm / installs. Nothing leaves your machine except one public Steam
-API call. It's a single native PowerShell script (Windows).
+API call. Native PowerShell (Windows). It comes in two flavors:
 
-## How it works
+- **A — OBS browser source:** a transparent web widget you add to OBS / Streamlabs. Best for
+  recording/streaming through OBS.
+- **B — Desktop overlay:** an always-on-top, click-through window that floats over your game.
+  Best for **Discord "Go Live" when you share your whole screen** (no OBS needed).
 
-Steam's public player-count endpoint sends no CORS headers, so an HTML overlay can't fetch
-it directly from inside OBS's browser. Instead, the script runs a tiny local web server that
-fetches Steam **server-side** and serves both the widget and a same-origin `/count` endpoint.
-OBS just points at `http://localhost:9011/` — no CORS, no external proxy, no data leaving
-your PC beyond the one Steam call.
+Use either or both — they read the same Steam data.
+
+---
+
+## Option A — OBS browser source
+
+Steam's public endpoint sends no CORS headers, so an HTML overlay can't fetch it directly from
+inside OBS's browser. So `nms-overlay-server.ps1` runs a tiny local web server that fetches
+Steam **server-side** and serves both the widget and a same-origin `/count` endpoint. OBS just
+points at `http://localhost:9011/` — no CORS, no external proxy.
 
 ```
 OBS Browser Source  ->  http://localhost:9011/         (the widget)
@@ -21,20 +28,14 @@ widget (in OBS)     ->  http://localhost:9011/count    (same-origin JSON, no COR
 local server        ->  api.steampowered.com           (the only outbound call)
 ```
 
-## Quick start
+**Quick start**
 
-1. Double-click **`Start-NMS-Overlay.cmd`**. A console window opens and stays open — that's
-   the little server. Leave it running while you record. (Or run the `.ps1` directly.)
-2. In OBS: **Sources → + → Browser Source → new**.
-   - URL: `http://localhost:9011/`
-   - Width `360`, Height `90`
-3. Position it in your scene. The number updates itself live.
+1. Double-click **`Start-NMS-Overlay.cmd`**. A console window opens and stays open — that's the
+   server. Leave it running while you record.
+2. In OBS: **Sources → + → Browser Source → new**. URL `http://localhost:9011/`, size `360 × 90`.
+3. Position it in your scene. Stop it by closing the console window (or **Ctrl+C**).
 
-Stop it by closing the console window (or pressing **Ctrl+C** in it).
-
-## Options
-
-Run the script from a terminal to change defaults:
+**Options**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File nms-overlay-server.ps1 -AppId 730 -Port 9011 -RefreshSeconds 60
@@ -44,17 +45,58 @@ powershell -ExecutionPolicy Bypass -File nms-overlay-server.ps1 -AppId 730 -Port
 |-------------------|----------|--------------------------------------------------------------------|
 | `-AppId`          | `275850` | Steam AppID. `275850` = No Man's Sky. Use any game's ID.           |
 | `-Port`           | `9011`   | Local server port (update the OBS URL to match if you change it).  |
-| `-RefreshSeconds` | `60`     | How often the server actually hits Steam (the count moves slowly). |
+| `-RefreshSeconds` | `60`     | How often the server hits Steam.                                   |
 
-Find any game's AppID in its Steam store URL: `store.steampowered.com/app/<AppID>/`.
+---
+
+## Option B — Desktop overlay (for Discord whole-screen share)
+
+`nms-desktop-overlay.ps1` opens a transparent, always-on-top, **click-through** window (mouse
+clicks pass straight through to the game) showing the same count. It talks straight to Steam —
+no OBS, no server.
+
+**Quick start**
+
+1. Double-click **`Start-NMS-Desktop-Overlay.cmd`**. The overlay appears in a screen corner; a
+   console window stays open.
+2. In your game, use **Borderless / Windowed** display mode.
+3. In Discord, **Go Live / Screen Share → "Screens" tab → pick the monitor** the game is on.
+4. To remove the overlay: close the console window (or **Ctrl+C** in it).
+
+**Options**
+
+```powershell
+powershell -ExecutionPolicy Bypass -STA -File nms-desktop-overlay.ps1 -Corner TopLeft -Monitor 1
+```
+
+| Flag              | Default    | Meaning                                                          |
+|-------------------|------------|------------------------------------------------------------------|
+| `-AppId`          | `275850`   | Steam AppID (any game).                                          |
+| `-RefreshSeconds` | `300`      | How often it hits Steam (~5 min matches Steam's own cache).      |
+| `-Corner`         | `TopRight` | `TopRight` / `TopLeft` / `BottomRight` / `BottomLeft`.           |
+| `-Margin`         | `24`       | Gap from the screen edge (device-independent pixels).           |
+| `-Monitor`        | primary    | 0-based display index to place the overlay on.                  |
+
+### ⚠️ Will Discord actually show it?
+
+Discord has two share modes and they behave differently:
+
+- ✅ **"Screens" (whole monitor)** — composites everything on that display, so the overlay
+  **shows**. The game must be **Borderless / Windowed** (Discord can't capture exclusive
+  fullscreen on Windows 11).
+- ❌ **"Applications" (single game window)** — Discord captures only that window's own pixels,
+  so **no external overlay can appear** (this applies to any overlay tool, not just this one).
+  Use whole-screen share instead.
+
+---
 
 ## Notes
 
-- The card background is transparent, so only the panel shows over your footage.
-- A green dot pulses while data is live; it turns red (and keeps the last known number on
-  screen) if Steam can't be reached.
-- The widget re-polls the local server every 30s; the server hits Steam at most once per
-  `-RefreshSeconds`. Well within Steam's 100,000-calls/day limit.
+- Backgrounds are transparent — only the panel shows over your game.
+- A dot shows live (green) vs. stale/reconnecting (red); the last known number stays on screen
+  if Steam can't be reached.
+- Steam caches the count for ~5 minutes, so the number won't change faster than that no matter
+  how often you poll. Both tools stay far under Steam's 100,000-calls/day limit.
 
 ## Disclaimer
 
