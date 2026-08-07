@@ -66,14 +66,14 @@ no OBS, no server.
 **Options**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -STA -File nms-desktop-overlay.ps1 -Corner TopLeft -Monitor 1
+powershell -ExecutionPolicy Bypass -STA -File nms-desktop-overlay.ps1 -Corner TopRight -Monitor 1
 ```
 
 | Flag              | Default    | Meaning                                                          |
 |-------------------|------------|------------------------------------------------------------------|
 | `-AppId`          | `275850`   | Steam AppID (any game).                                          |
 | `-RefreshSeconds` | `300`      | How often it hits Steam (~5 min matches Steam's own cache).      |
-| `-Corner`         | `TopRight` | `TopRight` / `TopLeft` / `BottomRight` / `BottomLeft`.           |
+| `-Corner`         | `TopLeft`  | `TopLeft` / `TopRight` / `BottomRight` / `BottomLeft`.           |
 | `-Margin`         | `24`       | Gap from the screen edge (device-independent pixels).           |
 | `-Monitor`        | primary    | 0-based display index to place the overlay on.                  |
 
