@@ -24,7 +24,7 @@
 
 param(
     [int]    $AppId          = 275850,      # 275850 = No Man's Sky
-    [int]    $RefreshSeconds = 60,          # how often to hit Steam (matches the OBS server default)
+    [int]    $RefreshSeconds = 480,         # 8 min (Steam only republishes this count ~every 14 min)
     [ValidateSet('TopRight','TopLeft','BottomRight','BottomLeft')]
     [string] $Corner         = 'TopLeft',
     [int]    $Margin         = 24,          # gap from the screen edge (device-independent px)
@@ -156,13 +156,13 @@ $poller.Runspace = $rs
                    FontWeight="Bold" FontFamily="Segoe UI"/>
         <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
           <TextBlock Text="&#9650; HIGH " Foreground="#7FD48F" FontSize="14"
-                     FontWeight="Bold" FontFamily="Segoe UI"/>
-          <TextBlock x:Name="Hi" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="14"
-                     FontWeight="SemiBold" FontFamily="Segoe UI" Margin="0,0,12,0"/>
+                     FontWeight="Bold" FontFamily="Segoe UI" VerticalAlignment="Center"/>
+          <TextBlock x:Name="Hi" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="17"
+                     FontWeight="SemiBold" FontFamily="Segoe UI" Margin="0,0,12,0" VerticalAlignment="Center"/>
           <TextBlock Text="&#9660; LOW " Foreground="#E79A94" FontSize="14"
-                     FontWeight="Bold" FontFamily="Segoe UI"/>
-          <TextBlock x:Name="Lo" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="14"
-                     FontWeight="SemiBold" FontFamily="Segoe UI"/>
+                     FontWeight="Bold" FontFamily="Segoe UI" VerticalAlignment="Center"/>
+          <TextBlock x:Name="Lo" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="17"
+                     FontWeight="SemiBold" FontFamily="Segoe UI" VerticalAlignment="Center"/>
         </StackPanel>
       </StackPanel>
     </StackPanel>
@@ -198,9 +198,15 @@ $glow.Freeze()
 $fxWindow = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $fxXaml))
 $script:fxCanvas = $fxWindow.FindName('Fx')
 $script:fxWhite  = $bc.ConvertFromString('#FFFFFF'); $script:fxWhite.Freeze()
-$script:fxRunning = $false
-$script:fxEnd = [DateTime]::MinValue
+$script:fxRunning    = $false                                  # a 20s show is in progress
+$script:fxBursting   = $false                                  # still launching new bursts
+$script:fxEnd        = [DateTime]::MinValue
 $script:fxBurstTimer = $null
+$script:fxParticles  = New-Object System.Collections.ArrayList # live particles
+$script:fxTick       = $null                                   # physics timer (~30fps)
+$script:fxTickOn     = $false
+$script:fxSw         = New-Object System.Diagnostics.Stopwatch # real dt between frames
+$script:fxLast       = 0.0
 
 $fxWindow.Add_SourceInitialized({ Set-ClickThrough $fxWindow })
 $fxWindow.Add_Loaded({
@@ -215,56 +221,93 @@ $fxWindow.Add_Loaded({
 })
 
 function Add-Particle($cx, $cy, $col) {
+    # a particle is launched radially from the burst centre; drag + gravity are
+    # applied every physics frame (see Update-Fireworks)
     $angle = (Get-Random -Minimum 0 -Maximum 6283) / 1000.0
-    $speed = 50 + (Get-Random -Minimum 0 -Maximum 230)
-    $life  = 1.1 + (Get-Random -Minimum 0 -Maximum 90) / 100.0
-    $vx = [math]::Cos($angle) * $speed
-    $vy = [math]::Sin($angle) * $speed
-    $g  = 320.0
-    $endX = $cx + $vx * $life
-    $endY = $cy + $vy * $life + 0.5 * $g * $life * $life
-    $r = 2 + (Get-Random -Minimum 0 -Maximum 2)
+    $speed = 150 + (Get-Random -Minimum 0 -Maximum 240)          # px/sec radial launch
+    $r     = 3 + (Get-Random -Minimum 0 -Maximum 3)              # a little larger than before
+    $max   = 1.7 + (Get-Random -Minimum 0 -Maximum 130) / 100.0  # lifetime 1.7 - 3.0s
     $e = New-Object System.Windows.Shapes.Ellipse
     $e.Width = $r * 2; $e.Height = $r * 2
     if ((Get-Random -Minimum 0 -Maximum 100) -lt 15) { $e.Fill = $script:fxWhite }
     else { $b2 = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($col)); $b2.Freeze(); $e.Fill = $b2 }
-    [System.Windows.Controls.Canvas]::SetLeft($e, $cx)
-    [System.Windows.Controls.Canvas]::SetTop($e, $cy)
+    [System.Windows.Controls.Canvas]::SetLeft($e, $cx - $r)
+    [System.Windows.Controls.Canvas]::SetTop($e, $cy - $r)
     [void]$script:fxCanvas.Children.Add($e)
-    $dur = New-Object System.Windows.Duration ([TimeSpan]::FromSeconds($life))
-    $ax = New-Object System.Windows.Media.Animation.DoubleAnimation $cx, $endX, $dur
-    $ay = New-Object System.Windows.Media.Animation.DoubleAnimation $cy, $endY, $dur
-    $eIn = New-Object System.Windows.Media.Animation.QuadraticEase; $eIn.EasingMode = 'EaseIn'
-    $ay.EasingFunction = $eIn
-    $ao = New-Object System.Windows.Media.Animation.DoubleAnimation 1.0, 0.0, $dur
-    $eIn2 = New-Object System.Windows.Media.Animation.QuadraticEase; $eIn2.EasingMode = 'EaseIn'
-    $ao.EasingFunction = $eIn2
-    $el = $e; $canvas = $script:fxCanvas   # capture as locals so GetNewClosure snapshots them
-    $ao.Add_Completed(({ [void]$canvas.Children.Remove($el) }).GetNewClosure())
-    $e.BeginAnimation([System.Windows.Controls.Canvas]::LeftProperty, $ax)
-    $e.BeginAnimation([System.Windows.Controls.Canvas]::TopProperty, $ay)
-    $e.BeginAnimation([System.Windows.UIElement]::OpacityProperty, $ao)
+    [void]$script:fxParticles.Add(@{
+        e = $e; x = $cx; y = $cy; r = $r
+        vx = [math]::Cos($angle) * $speed
+        vy = [math]::Sin($angle) * $speed
+        life = $max; max = $max
+    })
+}
+
+function Update-Fireworks {
+    $now = $script:fxSw.Elapsed.TotalSeconds
+    $dt  = $now - $script:fxLast; $script:fxLast = $now
+    if ($dt -le 0) { $dt = 0.016 } elseif ($dt -gt 0.1) { $dt = 0.1 }   # clamp after a stall
+    $g    = 260.0
+    $drag = [math]::Pow(0.25, $dt)          # retain ~25% of launch speed per second -> the "ball"
+    for ($i = $script:fxParticles.Count - 1; $i -ge 0; $i--) {
+        $p = $script:fxParticles[$i]
+        $p.life -= $dt
+        if ($p.life -le 0) {
+            [void]$script:fxCanvas.Children.Remove($p.e)
+            $script:fxParticles.RemoveAt($i)
+            continue
+        }
+        $p.vx = $p.vx * $drag
+        $p.vy = $p.vy * $drag + $g * $dt     # launch decays, then gravity dominates -> arc + fall
+        $p.x += $p.vx * $dt
+        $p.y += $p.vy * $dt
+        [System.Windows.Controls.Canvas]::SetLeft($p.e, $p.x - $p.r)
+        [System.Windows.Controls.Canvas]::SetTop($p.e, $p.y - $p.r)
+        $f = $p.life / $p.max                # 1 at birth -> 0 at death
+        $p.e.Opacity = if ($f -gt 0.5) { 1.0 } else { $f / 0.5 }   # hold bright, fade the last half
+    }
+    if ($script:fxParticles.Count -eq 0 -and -not $script:fxBursting) {
+        $script:fxTick.Stop(); $script:fxTickOn = $false          # idle -> stop burning CPU
+    }
+}
+
+function Enable-FxTick {
+    if ($script:fxTickOn) { return }
+    if ($null -eq $script:fxTick) {
+        $script:fxTick = New-Object System.Windows.Threading.DispatcherTimer
+        $script:fxTick.Interval = [TimeSpan]::FromMilliseconds(33)   # ~30 fps
+        $script:fxTick.Add_Tick({ Update-Fireworks })
+    }
+    $script:fxSw.Restart(); $script:fxLast = 0.0
+    $script:fxTickOn = $true
+    $script:fxTick.Start()
 }
 
 function Invoke-Burst {
     $w = $script:fxCanvas.ActualWidth;  if ($w -lt 50) { $w = 1280 }
     $h = $script:fxCanvas.ActualHeight; if ($h -lt 50) { $h = 720 }
     $cx = $w * (0.30 + (Get-Random -Minimum 0 -Maximum 40) / 100.0)
-    $cy = $h * (0.22 + (Get-Random -Minimum 0 -Maximum 34) / 100.0)
+    $cy = $h * (0.20 + (Get-Random -Minimum 0 -Maximum 30) / 100.0)
     $palette = @('#FFD84D','#FFB347','#FF6B6B','#4EE06A','#5BD6FF','#C78BFF')
     $col = $palette[(Get-Random -Minimum 0 -Maximum $palette.Count)]
-    for ($i = 0; $i -lt 46; $i++) { Add-Particle $cx $cy $col }
+    for ($i = 0; $i -lt 32; $i++) { Add-Particle $cx $cy $col }
 }
 
 function Start-Fireworks {
     if ($script:fxRunning) { return }
-    $script:fxRunning = $true
+    $script:fxRunning  = $true
+    $script:fxBursting = $true
     $script:fxEnd = [DateTime]::UtcNow.AddSeconds(20)
+    Enable-FxTick
     Invoke-Burst
     $script:fxBurstTimer = New-Object System.Windows.Threading.DispatcherTimer
-    $script:fxBurstTimer.Interval = [TimeSpan]::FromMilliseconds(550)
+    $script:fxBurstTimer.Interval = [TimeSpan]::FromMilliseconds(650)
     $script:fxBurstTimer.Add_Tick({
-        if ([DateTime]::UtcNow -ge $script:fxEnd) { $script:fxBurstTimer.Stop(); $script:fxRunning = $false; return }
+        if ([DateTime]::UtcNow -ge $script:fxEnd) {
+            $script:fxBurstTimer.Stop()
+            $script:fxBursting = $false
+            $script:fxRunning  = $false
+            return
+        }
         Invoke-Burst
     })
     $script:fxBurstTimer.Start()
