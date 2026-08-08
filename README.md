@@ -113,21 +113,6 @@ Discord has two share modes and they behave differently:
 - Steam caches the count for ~5 minutes, so the number won't change faster than that no matter
   how often you poll. Both tools stay far under Steam's 100,000-calls/day limit.
 
-## ⚠️ Temporary test line (remove before real use)
-
-Both scripts currently contain a **TEST ONLY** block that, on the first reading, lowers the
-threshold to `firstValue + 1` so the fireworks trip on the next small uptick — handy for seeing
-the effect without waiting for an actual record. Each is clearly marked:
-
-```powershell
-# --- TEST ONLY: ... Delete this block for production. ---
-...
-# --- end TEST ---
-```
-
-Delete that block in `nms-overlay-server.ps1` and `nms-desktop-overlay.ps1` to restore the real
-`212613` threshold (or whatever you pass via `-Threshold`).
-
 ## Disclaimer
 
 This is an unofficial, fan-made tool. It is **not affiliated with, endorsed by, or sponsored
