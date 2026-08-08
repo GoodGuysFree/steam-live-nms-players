@@ -34,6 +34,10 @@ local server        ->  api.steampowered.com           (the only outbound call)
    server. Leave it running while you record.
 2. In OBS: **Sources → + → Browser Source → new**. URL `http://localhost:9011/`, size `380 × 118`.
 3. Position it in your scene. Stop it by closing the console window (or **Ctrl+C**).
+4. *(Optional)* For the record-break **fireworks**, add a **second** Browser Source pointing at
+   `http://localhost:9011/?mode=fireworks`, sized to your full canvas (e.g. `1920 × 1080`). It's
+   transparent and only draws during a celebration. The card source doesn't show fireworks
+   (it's too small); this full-screen source is what puts them in the middle of the screen.
 
 **Options**
 
@@ -41,11 +45,12 @@ local server        ->  api.steampowered.com           (the only outbound call)
 powershell -ExecutionPolicy Bypass -File nms-overlay-server.ps1 -AppId 730 -Port 9011 -RefreshSeconds 60
 ```
 
-| Flag              | Default  | Meaning                                                            |
-|-------------------|----------|--------------------------------------------------------------------|
-| `-AppId`          | `275850` | Steam AppID. `275850` = No Man's Sky. Use any game's ID.           |
-| `-Port`           | `9011`   | Local server port (update the OBS URL to match if you change it).  |
-| `-RefreshSeconds` | `60`     | How often the server hits Steam.                                   |
+| Flag              | Default    | Meaning                                                            |
+|-------------------|------------|--------------------------------------------------------------------|
+| `-AppId`          | `275850`   | Steam AppID. `275850` = No Man's Sky. Use any game's ID.           |
+| `-Port`           | `9011`     | Local server port (update the OBS URL to match if you change it).  |
+| `-RefreshSeconds` | `60`       | How often the server hits Steam.                                   |
+| `-Threshold`      | `212613`   | Beat this live and the fireworks fire (NMS all-time concurrent record). |
 
 ---
 
@@ -76,6 +81,10 @@ powershell -ExecutionPolicy Bypass -STA -File nms-desktop-overlay.ps1 -Corner To
 | `-Corner`         | `TopLeft`  | `TopLeft` / `TopRight` / `BottomRight` / `BottomLeft`.           |
 | `-Margin`         | `24`       | Gap from the screen edge (device-independent pixels).           |
 | `-Monitor`        | primary    | 0-based display index to place the overlay on.                  |
+| `-Threshold`      | `212613`   | Beat this live -> 20s full-screen fireworks (NMS all-time record). |
+
+The desktop overlay's fireworks are **built in** — when the record breaks it plays a 20-second
+full-screen show on the same monitor automatically. No extra setup.
 
 ### ⚠️ Will Discord actually show it?
 
@@ -95,10 +104,29 @@ Discord has two share modes and they behave differently:
 - Backgrounds are transparent — only the panel shows over your game.
 - **HIGH / LOW** are the session peak and trough — the highest and lowest counts seen since you
   started the overlay. They reset when you restart it.
+- **Colours:** the current number turns **green** when it's at the session high, **yellow** when
+  it's at the session low, and white in between.
+- **Record celebration:** if the live count beats `-Threshold`, the current + high numbers get a
+  glow and a 20-second fireworks show plays (desktop: automatic; OBS: via the fireworks source).
 - A dot shows live (green) vs. stale/reconnecting (red); the last known number stays on screen
   if Steam can't be reached.
 - Steam caches the count for ~5 minutes, so the number won't change faster than that no matter
   how often you poll. Both tools stay far under Steam's 100,000-calls/day limit.
+
+## ⚠️ Temporary test line (remove before real use)
+
+Both scripts currently contain a **TEST ONLY** block that, on the first reading, lowers the
+threshold to `firstValue + 1` so the fireworks trip on the next small uptick — handy for seeing
+the effect without waiting for an actual record. Each is clearly marked:
+
+```powershell
+# --- TEST ONLY: ... Delete this block for production. ---
+...
+# --- end TEST ---
+```
+
+Delete that block in `nms-overlay-server.ps1` and `nms-desktop-overlay.ps1` to restore the real
+`212613` threshold (or whatever you pass via `-Threshold`).
 
 ## Disclaimer
 
