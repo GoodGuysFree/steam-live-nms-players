@@ -14,15 +14,55 @@
 
 param(
     [int]    $Port  = 9011,
-    [int]    $AppId = 275850,       # 275850 = No Man's Sky
-    [int]    $RefreshSeconds = 60,  # how often to actually hit Steam (count moves slowly)
-    [int]    $Threshold = 212613    # beat this live -> fireworks (NMS all-time concurrent record)
+    [int]    $AppId = 275850,             # 275850 = No Man's Sky
+    [int]    $ActivePollSeconds     = 60, # cadence while fast-polling to catch the next change
+    [int]    $QuietMinutes          = 12, # after the first read / a change, sit quiet this long
+    [int]    $ChangeIntervalMinutes = 14, # Steam republishes ~every 14 min (drives the estimate)
+    [int]    $Threshold = 212613          # beat this live -> fireworks (NMS all-time concurrent record)
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $SteamUrl = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=$AppId"
+
+# ---- optional config (shared with the desktop overlay) ---------------------
+$ScriptDir   = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$IconPath    = ''
+$ShowNms10   = $true
+$Nms10Path   = 'assets/nms10-logo.png'
+$IconOpacity = 1.0
+$cfgFile = Join-Path $ScriptDir 'overlay-config.json'
+if (Test-Path -LiteralPath $cfgFile) {
+    try {
+        $cfg = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -ne $cfg.icon)          { $IconPath    = [string]$cfg.icon }
+        if ($null -ne $cfg.showNms10Logo) { $ShowNms10   = [bool]$cfg.showNms10Logo }
+        if ($null -ne $cfg.nms10Logo)     { $Nms10Path   = [string]$cfg.nms10Logo }
+        if ($null -ne $cfg.iconOpacity)   { $IconOpacity = [double]$cfg.iconOpacity }
+    } catch {
+        Write-Host "  (config: could not read overlay-config.json: $($_.Exception.Message))" -ForegroundColor DarkYellow
+    }
+}
+function Resolve-Asset($p) {
+    if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+    if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $ScriptDir $p }
+    if (Test-Path -LiteralPath $p) { return (Resolve-Path -LiteralPath $p).Path }
+    return $null
+}
+function Get-ContentType($p) {
+    switch ([System.IO.Path]::GetExtension($p).ToLowerInvariant()) {
+        '.png'  { 'image/png' }
+        '.jpg'  { 'image/jpeg' }
+        '.jpeg' { 'image/jpeg' }
+        '.gif'  { 'image/gif' }
+        '.webp' { 'image/webp' }
+        '.svg'  { 'image/svg+xml' }
+        default { 'application/octet-stream' }
+    }
+}
+$IconAbs  = Resolve-Asset $IconPath
+$Nms10Abs = if ($ShowNms10) { Resolve-Asset $Nms10Path } else { $null }
 
 # ---- cache -----------------------------------------------------------------
 $script:Count   = $null
@@ -33,30 +73,46 @@ $script:Ok      = $false
 $script:Threshold      = $Threshold
 $script:WasAbove       = $false
 $script:CelebrateUntil = [DateTime]::MinValue
+$script:LastChangeAt   = [DateTime]::MinValue
+$script:NextFetchAt    = [DateTime]::MinValue    # earliest next real Steam fetch (adaptive)
+$script:Prev           = $null
 
 function Get-PlayerCount {
-    $age = ([DateTime]::UtcNow - $script:At).TotalSeconds
-    if ($script:Ok -and $age -lt $RefreshSeconds) { return }   # serve cache
+    # adaptive cadence: after the first read or a change, sit quiet (the count only moves
+    # ~every 14 min); otherwise fast-poll. Driven by the widget's frequent /count requests.
+    if ([DateTime]::UtcNow -lt $script:NextFetchAt) { return }
+    $changed = $false; $isFirst = $false; $gotValue = $false
     try {
         $resp = Invoke-RestMethod -Uri $SteamUrl -TimeoutSec 10
         if ($resp.response -and $resp.response.result -eq 1) {
-            $script:Count = [int]$resp.response.player_count
+            $c = [int]$resp.response.player_count
+            $script:Count = $c
             $script:At    = [DateTime]::UtcNow
             $script:Ok    = $true
-            if ($null -eq $script:High -or $script:Count -gt $script:High) { $script:High = $script:Count }
-            if ($null -eq $script:Low  -or $script:Count -lt $script:Low ) { $script:Low  = $script:Count }
+            if ($null -eq $script:High -or $c -gt $script:High) { $script:High = $c }
+            if ($null -eq $script:Low  -or $c -lt $script:Low ) { $script:Low  = $c }
 
-            $above = $script:Count -gt $script:Threshold
+            $above = $c -gt $script:Threshold
             if ($above -and -not $script:WasAbove) {
                 $script:CelebrateUntil = [DateTime]::UtcNow.AddSeconds(20)
-                Write-Host ("[{0}] RECORD! {1} > {2} -- fireworks!" -f (Get-Date -Format T), $script:Count, $script:Threshold) -ForegroundColor Green
+                Write-Host ("[{0}] RECORD! {1} > {2} -- fireworks!" -f (Get-Date -Format T), $c, $script:Threshold) -ForegroundColor Green
             }
             $script:WasAbove = $above
+
+            if ($null -eq $script:Prev)  { $isFirst = $true; $script:LastChangeAt = [DateTime]::UtcNow }
+            elseif ($c -ne $script:Prev) { $changed = $true; $script:LastChangeAt = [DateTime]::UtcNow }
+            $gotValue = $true
+
+            $tag = if ($isFirst) { '(first read)' } elseif ($changed) { "CHANGED from $($script:Prev)" } else { '(unchanged)' }
+            Write-Host ("[{0}] Steam: {1:N0}  high {2:N0} / low {3:N0}  {4}" -f (Get-Date -Format T), $c, $script:High, $script:Low, $tag)
+            $script:Prev = $c
         }
     } catch {
         # keep last known good value; mark stale only if we never had one
         Write-Host ("[{0}] Steam fetch failed: {1}" -f (Get-Date -Format T), $_.Exception.Message) -ForegroundColor DarkYellow
     }
+    $sleepSec = if ($gotValue -and ($isFirst -or $changed)) { $QuietMinutes * 60 } else { $ActivePollSeconds }
+    $script:NextFetchAt = [DateTime]::UtcNow.AddSeconds($sleepSec)
 }
 
 # ---- overlay page (single-quoted here-string => no PS interpolation) --------
@@ -67,7 +123,7 @@ $Html = @'
 <meta charset="utf-8">
 <title>NMS Live Players</title>
 <style>
-  :root{ --amber:#ffb347; --amber-dim:#e8922e; --panel:rgba(8,14,22,.62); }
+  :root{ --amber:#ffb347; --amber-dim:#e8922e; --panel:rgba(8,14,22,.62); --yellow:#ffd84d; }
   html,body{ margin:0; background:transparent; overflow:hidden; width:100%; height:100%;
              font-family:"Segoe UI",Roboto,system-ui,sans-serif; }
   #fx{ position:fixed; inset:0; width:100vw; height:100vh; display:none; pointer-events:none; }
@@ -82,8 +138,11 @@ $Html = @'
     box-shadow:0 6px 26px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.03);
     -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
   }
-  #glyph{ width:34px; height:34px; flex:0 0 auto; opacity:.95;
-          filter:drop-shadow(0 0 6px rgba(255,179,71,.4)); }
+  #icons{ display:flex; flex-direction:column; align-items:center; gap:6px; flex:0 0 auto; }
+  #topbox{ position:relative; width:34px; height:34px; }
+  #planet{ width:34px; height:34px; filter:drop-shadow(0 0 6px rgba(255,179,71,.4)); }
+  #topicon{ position:absolute; inset:0; width:34px; height:34px; object-fit:contain; display:none; }
+  #nms10{ width:34px; height:34px; object-fit:contain; display:none; }
   #text{ line-height:1; }
   #label{ font-size:11px; letter-spacing:.22em; text-transform:uppercase;
           color:var(--amber); font-weight:600; margin-bottom:6px;
@@ -97,27 +156,38 @@ $Html = @'
         text-shadow:0 1px 2px rgba(0,0,0,.6);
         transition:color .3s ease, text-shadow .3s ease; }
   #num.green{ color:#4ee06a; }
-  #num.yellow{ color:#ffd84d; }
+  #num.yellow{ color:var(--yellow); }
   #num.rec{ text-shadow:0 0 14px var(--amber),0 0 30px var(--amber),0 1px 2px rgba(0,0,0,.6); }
   #hilo{ font-size:14px; margin-top:6px; color:rgba(255,255,255,.62);
          font-variant-numeric:tabular-nums; letter-spacing:.03em;
-         display:flex; gap:14px; }
-  #hilo .k{ font-weight:700; margin-right:3px; }
+         display:flex; gap:14px; align-items:center; }
+  #hilo .k{ font-weight:700; margin-right:4px; font-size:14px; }
   #hilo .hi .k{ color:#7fd48f; }
   #hilo .lo .k{ color:#e79a94; }
-  #hilo b{ color:rgba(255,255,255,.85); font-weight:600; transition:text-shadow .3s ease, color .3s ease; }
+  #hilo b{ color:rgba(255,255,255,.9); font-weight:600; font-size:17px;
+           transition:text-shadow .3s ease, color .3s ease; }
   #hilo b#hi.rec{ text-shadow:0 0 12px var(--amber),0 0 24px var(--amber); color:#fff; }
+  #meta{ font-size:11px; margin-top:8px; color:var(--yellow);
+         font-variant-numeric:tabular-nums; letter-spacing:.02em; }
+  #meta b{ color:#fff; font-weight:600; }
+  #meta .sep{ display:inline-block; width:22px; }
 </style>
 </head>
 <body>
   <canvas id="fx"></canvas>
   <div id="card">
-    <svg id="glyph" viewBox="0 0 24 24" fill="none" stroke="#ffb347" stroke-width="1.6"
-         stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="9"/>
-      <ellipse cx="12" cy="12" rx="9" ry="3.6"/>
-      <path d="M4 9.5c3 1.6 13 1.6 16 0M4 14.5c3-1.6 13-1.6 16 0"/>
-    </svg>
+    <div id="icons">
+      <div id="topbox">
+        <svg id="planet" viewBox="0 0 24 24" fill="none" stroke="#ffb347" stroke-width="1.6"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <ellipse cx="12" cy="12" rx="9" ry="3.6"/>
+          <path d="M4 9.5c3 1.6 13 1.6 16 0M4 14.5c3-1.6 13-1.6 16 0"/>
+        </svg>
+        <img id="topicon" alt="">
+      </div>
+      <img id="nms10" alt="">
+    </div>
     <div id="text">
       <div id="label"><span id="dot"></span>Players Online &middot; No Man's Sky</div>
       <div id="num">&mdash;</div>
@@ -125,6 +195,7 @@ $Html = @'
         <span class="hi"><span class="k">&#9650; HIGH</span><b id="hi">&mdash;</b></span>
         <span class="lo"><span class="k">&#9660; LOW</span><b id="lo">&mdash;</b></span>
       </div>
+      <div id="meta">Next poll: <b id="np">&mdash;</b>m<span class="sep"></span>Est. next change: <b id="ec">&mdash;</b>m</div>
     </div>
   </div>
 
@@ -132,13 +203,24 @@ $Html = @'
   var MODE = (location.search.indexOf('fireworks') >= 0) ? 'fireworks' : 'card';
   if (MODE === 'fireworks') document.body.classList.add('fireworks');
 
-  var numEl = document.getElementById('num');
-  var dotEl = document.getElementById('dot');
-  var hiEl  = document.getElementById('hi');
-  var loEl  = document.getElementById('lo');
+  var numEl=document.getElementById('num'), dotEl=document.getElementById('dot'),
+      hiEl=document.getElementById('hi'), loEl=document.getElementById('lo'),
+      npEl=document.getElementById('np'), ecEl=document.getElementById('ec'),
+      iconsEl=document.getElementById('icons'),
+      planetEl=document.getElementById('planet'), topIconEl=document.getElementById('topicon'),
+      nms10El=document.getElementById('nms10');
   var shown = 0;
 
+  // icons served by the local server from overlay-config.json (planet is the fallback)
+  topIconEl.onload  = function(){ topIconEl.style.display='block'; planetEl.style.display='none'; };
+  topIconEl.onerror = function(){ topIconEl.style.display='none';  planetEl.style.display='block'; };
+  topIconEl.src = '/icon';
+  nms10El.onload  = function(){ nms10El.style.display='block'; };
+  nms10El.onerror = function(){ nms10El.style.display='none'; };
+  nms10El.src = '/nms10';
+
   function fmt(n){ return (typeof n === 'number') ? n.toLocaleString('en-US') : '—'; }
+  function mins(sec){ return (typeof sec === 'number') ? Math.max(0, Math.ceil(sec/60)) : '—'; }
 
   function animateTo(target){
     var start = shown, t0 = null, dur = 700;
@@ -157,6 +239,9 @@ $Html = @'
     animateTo(d.count);
     hiEl.textContent = fmt(d.high);
     loEl.textContent = fmt(d.low);
+    npEl.textContent = mins(d.nextPollSec);
+    ecEl.textContent = mins(d.estChangeSec);
+    if (typeof d.iconOpacity === 'number') iconsEl.style.opacity = d.iconOpacity;
     numEl.classList.remove('green','yellow');
     if (typeof d.high === 'number' && d.count === d.high) numEl.classList.add('green');
     else if (typeof d.low === 'number' && d.count === d.low && d.high > d.low) numEl.classList.add('yellow');
@@ -243,8 +328,9 @@ try {
 
 Write-Host ""
 Write-Host "  No Man's Sky live-players overlay is running." -ForegroundColor Green
-Write-Host "  In OBS: add a Browser Source ->  $prefix   (suggested size 380 x 118)" -ForegroundColor Cyan
+Write-Host "  In OBS: add a Browser Source ->  $prefix   (suggested size 400 x 150)" -ForegroundColor Cyan
 Write-Host "  Fireworks (optional): 2nd Browser Source -> ${prefix}?mode=fireworks  (full canvas, e.g. 1920 x 1080)" -ForegroundColor Cyan
+Write-Host "  Icons / opacity follow overlay-config.json (shared with the desktop overlay)." -ForegroundColor DarkGray
 Write-Host "  Press Ctrl+C in this window to stop." -ForegroundColor DarkGray
 Write-Host ""
 
@@ -265,21 +351,43 @@ try {
         try {
             if ($path -eq '/count') {
                 Get-PlayerCount
-                $stale = (([DateTime]::UtcNow - $script:At).TotalSeconds -gt ($RefreshSeconds * 3))
+                $now = [DateTime]::UtcNow
+                $stale = (($now - $script:At).TotalMinutes -gt ($QuietMinutes + 6))
+                $nextPollSec  = if ($script:NextFetchAt  -ne [DateTime]::MinValue) { [int][math]::Max(0, ($script:NextFetchAt - $now).TotalSeconds) } else { $null }
+                $estChangeSec = if ($script:LastChangeAt -ne [DateTime]::MinValue) { [int][math]::Max(0, ($script:LastChangeAt.AddMinutes($ChangeIntervalMinutes) - $now).TotalSeconds) } else { $null }
                 $payload = @{
-                    ok        = [bool]$script:Ok
-                    count     = $script:Count
-                    high      = $script:High
-                    low       = $script:Low
-                    stale     = [bool]$stale
-                    threshold = $script:Threshold
-                    record    = [bool]($null -ne $script:Count -and $script:Count -gt $script:Threshold)
-                    celebrate = [bool]([DateTime]::UtcNow -lt $script:CelebrateUntil)
+                    ok           = [bool]$script:Ok
+                    count        = $script:Count
+                    high         = $script:High
+                    low          = $script:Low
+                    stale        = [bool]$stale
+                    threshold    = $script:Threshold
+                    record       = [bool]($null -ne $script:Count -and $script:Count -gt $script:Threshold)
+                    celebrate    = [bool]([DateTime]::UtcNow -lt $script:CelebrateUntil)
+                    nextPollSec  = $nextPollSec
+                    estChangeSec = $estChangeSec
+                    iconOpacity  = $IconOpacity
                 } | ConvertTo-Json -Compress
                 $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
                 $res.ContentType = 'application/json'
                 $res.Headers.Add('Cache-Control','no-store')
                 $res.OutputStream.Write($bytes, 0, $bytes.Length)
+            }
+            elseif ($path -eq '/icon') {
+                if ($IconAbs) {
+                    $bytes = [System.IO.File]::ReadAllBytes($IconAbs)
+                    $res.ContentType = (Get-ContentType $IconAbs)
+                    $res.Headers.Add('Cache-Control','no-store')
+                    $res.OutputStream.Write($bytes, 0, $bytes.Length)
+                } else { $res.StatusCode = 404 }   # no custom icon -> widget shows the planet
+            }
+            elseif ($path -eq '/nms10') {
+                if ($Nms10Abs) {
+                    $bytes = [System.IO.File]::ReadAllBytes($Nms10Abs)
+                    $res.ContentType = (Get-ContentType $Nms10Abs)
+                    $res.Headers.Add('Cache-Control','no-store')
+                    $res.OutputStream.Write($bytes, 0, $bytes.Length)
+                } else { $res.StatusCode = 404 }   # no logo -> widget hides that slot
             }
             elseif ($path -eq '/' -or $path -eq '/index.html') {
                 $res.ContentType = 'text/html; charset=utf-8'

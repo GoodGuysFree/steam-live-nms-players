@@ -14,3 +14,6 @@ overlay-config.json
 # User-dropped icons; keep only the bundled NMS10 community logo
 assets/*
 !assets/nms10-logo.png
+
+# Local record of the NMS10 logo usage approval (not for the repo)
+nms10-logo-approval.png
