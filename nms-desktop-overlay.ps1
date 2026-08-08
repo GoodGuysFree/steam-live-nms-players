@@ -84,6 +84,7 @@ $poller = [powershell]::Create()
 $poller.Runspace = $rs
 [void]$poller.AddScript({
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $prev = $null
     while (-not $sync.stop) {
         try {
             $r = Invoke-RestMethod -Uri $SteamUrl -TimeoutSec 10
@@ -104,8 +105,21 @@ $poller.Runspace = $rs
                 if ($above -and -not $sync.wasAbove) { $sync.recordSeq = [int]$sync.recordSeq + 1 }
                 $sync.wasAbove = $above
                 $sync.record   = $above
+
+                # echo every read to the console (Console.WriteLine, since Write-Host from a
+                # background runspace does not reach the console)
+                $tag = if ($null -eq $prev) { '  (first read)' }
+                       elseif ($c -ne $prev) { "  <-- CHANGED from $prev" }
+                       else { '  (unchanged)' }
+                [Console]::WriteLine(("[{0}] Steam: {1,7:N0}   high {2:N0} / low {3:N0}{4}" -f (Get-Date -Format 'HH:mm:ss'), $c, [int]$sync.high, [int]$sync.low, $tag))
+                $prev = $c
             }
-        } catch { }
+            else {
+                [Console]::WriteLine(("[{0}] Steam: unexpected response (result != 1)" -f (Get-Date -Format 'HH:mm:ss')))
+            }
+        } catch {
+            [Console]::WriteLine(("[{0}] Steam read FAILED: {1}" -f (Get-Date -Format 'HH:mm:ss'), $_.Exception.Message))
+        }
         $slept = 0
         while ($slept -lt $RefreshSeconds -and -not $sync.stop) { Start-Sleep -Seconds 1; $slept++ }
     }
