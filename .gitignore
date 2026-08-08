@@ -7,3 +7,10 @@ Desktop.ini
 .vs/
 .vscode/
 *.swp
+
+# Your personal overlay config (the committed template is overlay-config.sample.json)
+overlay-config.json
+
+# User-dropped icons; keep only the bundled NMS10 community logo
+assets/*
+!assets/nms10-logo.png

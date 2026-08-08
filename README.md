@@ -133,7 +133,8 @@ Delete that block in `nms-overlay-server.ps1` and `nms-desktop-overlay.ps1` to r
 This is an unofficial, fan-made tool. It is **not affiliated with, endorsed by, or sponsored
 by** Hello Games (No Man's Sky) or Valve Corporation (Steam). "No Man's Sky", "Steam", and all
 related names are trademarks of their respective owners and are used here only descriptively.
-The tool uses Steam's public Web API and bundles no game assets.
+The tool uses Steam's public Web API. The bundled NMS10 logo is a community-made asset (not an
+official Hello Games asset).
 
 ## License
 

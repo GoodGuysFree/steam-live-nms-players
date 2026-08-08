@@ -37,6 +37,36 @@ param(
 $ErrorActionPreference = 'Stop'
 $SteamUrl = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid=$AppId"
 
+# --- optional config file (overlay-config.json beside this script) ----------
+$ScriptDir  = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$IconPath   = ''                       # top icon path/name; empty -> built-in planet
+$ShowNms10  = $true                    # show the NMS10 logo beneath the top icon
+$Nms10Path  = 'assets/nms10-logo.png'  # path/name of that logo (kept out of the public repo)
+$Scale      = 1.0                      # size multiplier for the whole card (DPI-independent)
+$cfgFile = Join-Path $ScriptDir 'overlay-config.json'
+if (Test-Path -LiteralPath $cfgFile) {
+    try {
+        $cfg = Get-Content -LiteralPath $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($null -ne $cfg.icon)          { $IconPath  = [string]$cfg.icon }
+        if ($null -ne $cfg.showNms10Logo) { $ShowNms10 = [bool]$cfg.showNms10Logo }
+        if ($null -ne $cfg.nms10Logo)     { $Nms10Path = [string]$cfg.nms10Logo }
+        if ($null -ne $cfg.scale)         { $Scale     = [double]$cfg.scale }
+        if ($null -ne $cfg.corner  -and -not $PSBoundParameters.ContainsKey('Corner'))  { $Corner  = [string]$cfg.corner }
+        if ($null -ne $cfg.margin  -and -not $PSBoundParameters.ContainsKey('Margin'))  { $Margin  = [int]$cfg.margin }
+        if ($null -ne $cfg.monitor -and -not $PSBoundParameters.ContainsKey('Monitor')) { $Monitor = [int]$cfg.monitor }
+    } catch {
+        Write-Host "  (config: could not read overlay-config.json: $($_.Exception.Message))" -ForegroundColor DarkYellow
+    }
+}
+function Resolve-Asset($p) {
+    if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+    if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $ScriptDir $p }
+    if (Test-Path -LiteralPath $p) { return (Resolve-Path -LiteralPath $p).Path }
+    return $null
+}
+$IconAbs  = Resolve-Asset $IconPath
+$Nms10Abs = if ($ShowNms10) { Resolve-Asset $Nms10Path } else { $null }
+
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Windows.Forms
 
 # --- native interop: DPI awareness + click-through -------------------------
@@ -71,7 +101,7 @@ function Get-Screen {
 # --- shared state, written by the background poller ------------------------
 $sync = [hashtable]::Synchronized(@{
     count = $null; high = $null; low = $null; ok = $false; at = [DateTime]::MinValue
-    stop = $false; threshold = $Threshold; threshApplied = $false
+    stop = $false; threshold = $Threshold
     wasAbove = $false; record = $false; recordSeq = 0
     nextPollAt = [DateTime]::MinValue; lastChangeAt = [DateTime]::MinValue
 })
@@ -101,11 +131,6 @@ $poller.Runspace = $rs
                 $sync.at    = [DateTime]::UtcNow
                 if ($null -eq $sync.high -or $c -gt $sync.high) { $sync.high = $c }
                 if ($null -eq $sync.low  -or $c -lt $sync.low ) { $sync.low  = $c }
-
-                # --- TEST ONLY: on the first reading, drop the threshold to (value+1)
-                #     so the next uptick trips the fireworks. Delete for production. ---
-                if (-not $sync.threshApplied) { $sync.threshold = $c + 1; $sync.threshApplied = $true }
-                # --- end TEST ---
 
                 $above = $c -gt [int]$sync.threshold
                 if ($above -and -not $sync.wasAbove) { $sync.recordSeq = [int]$sync.recordSeq + 1 }
@@ -149,19 +174,26 @@ $poller.Runspace = $rs
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ShowActivated="False"
         ResizeMode="NoResize" SizeToContent="WidthAndHeight">
-  <Border Padding="16,12,20,12" CornerRadius="14" Background="#9E0A0E16"
+  <Border x:Name="CardRoot" Padding="16,12,20,12" CornerRadius="14" Background="#9E0A0E16"
           BorderBrush="#59FFB347" BorderThickness="1">
     <Border.Effect>
       <DropShadowEffect BlurRadius="22" ShadowDepth="3" Opacity="0.5" Color="#000000"/>
     </Border.Effect>
     <StackPanel Orientation="Horizontal">
-      <Grid Width="34" Height="34" Margin="0,0,14,0" VerticalAlignment="Center">
-        <Ellipse Stroke="#FFB347" StrokeThickness="1.6" Width="26" Height="26"/>
-        <Ellipse Stroke="#FFB347" StrokeThickness="1.6" Width="33" Height="12"
-                 RenderTransformOrigin="0.5,0.5">
-          <Ellipse.RenderTransform><RotateTransform Angle="-20"/></Ellipse.RenderTransform>
-        </Ellipse>
-      </Grid>
+      <StackPanel Orientation="Vertical" Margin="0,0,14,0" VerticalAlignment="Center">
+        <Grid Width="34" Height="34">
+          <Grid x:Name="PlanetIcon">
+            <Ellipse Stroke="#FFB347" StrokeThickness="1.6" Width="26" Height="26"/>
+            <Ellipse Stroke="#FFB347" StrokeThickness="1.6" Width="33" Height="12"
+                     RenderTransformOrigin="0.5,0.5">
+              <Ellipse.RenderTransform><RotateTransform Angle="-20"/></Ellipse.RenderTransform>
+            </Ellipse>
+          </Grid>
+          <Image x:Name="TopIcon" Stretch="Uniform" Visibility="Collapsed"/>
+        </Grid>
+        <Image x:Name="Nms10Icon" Width="34" Height="34" Stretch="Uniform"
+               Margin="0,6,0,0" Visibility="Collapsed"/>
+      </StackPanel>
       <StackPanel VerticalAlignment="Center">
         <StackPanel Orientation="Horizontal" Margin="0,0,0,5">
           <Ellipse x:Name="Dot" Width="8" Height="8" Fill="#4EE06A" Margin="0,0,7,0" VerticalAlignment="Center"/>
@@ -187,12 +219,44 @@ $poller.Runspace = $rs
 </Window>
 '@
 $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
-$num       = $win.FindName('Num')
-$dot       = $win.FindName('Dot')
-$hi        = $win.FindName('Hi')
-$lo        = $win.FindName('Lo')
-$nextPoll  = $win.FindName('NextPoll')
-$estChange = $win.FindName('EstChange')
+$num        = $win.FindName('Num')
+$dot        = $win.FindName('Dot')
+$hi         = $win.FindName('Hi')
+$lo         = $win.FindName('Lo')
+$nextPoll   = $win.FindName('NextPoll')
+$estChange  = $win.FindName('EstChange')
+$planetIcon = $win.FindName('PlanetIcon')
+$topIcon    = $win.FindName('TopIcon')
+$nms10Icon  = $win.FindName('Nms10Icon')
+$cardRoot   = $win.FindName('CardRoot')
+
+function New-Bitmap($absPath) {
+    $bi = New-Object System.Windows.Media.Imaging.BitmapImage
+    $bi.BeginInit()
+    $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad   # don't lock the file
+    $bi.UriSource   = New-Object System.Uri($absPath)
+    $bi.EndInit()
+    $bi.Freeze()
+    return $bi
+}
+
+# top icon: a custom image if configured and found, otherwise the built-in planet
+if ($IconAbs) {
+    try {
+        $topIcon.Source = New-Bitmap $IconAbs
+        $topIcon.Visibility    = [System.Windows.Visibility]::Visible
+        $planetIcon.Visibility = [System.Windows.Visibility]::Collapsed
+    } catch { Write-Host "  (config: could not load icon '$IconAbs': $($_.Exception.Message))" -ForegroundColor DarkYellow }
+}
+# NMS10 logo beneath it (only shown if the file is present)
+if ($Nms10Abs) {
+    try {
+        $nms10Icon.Source = New-Bitmap $Nms10Abs
+        $nms10Icon.Visibility = [System.Windows.Visibility]::Visible
+    } catch { Write-Host "  (config: could not load NMS10 logo '$Nms10Abs': $($_.Exception.Message))" -ForegroundColor DarkYellow }
+}
+# overall size multiplier (independent of screen DPI/resolution)
+if ($Scale -ne 1.0) { $cardRoot.LayoutTransform = New-Object System.Windows.Media.ScaleTransform($Scale, $Scale) }
 
 # --- brushes + record glow --------------------------------------------------
 $bc = [Windows.Media.BrushConverter]::new()

@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy this file to overlay-config.json (same folder) and edit. All keys are optional; anything omitted uses the built-in default. Explicit -Corner/-Margin/-Monitor command-line params override this file.",
+
+  "icon": "",
+  "_icon": "Top icon. A full path (e.g. C:\\\\pics\\\\myicon.png) OR just a filename if you drop the file next to the script / in assets\\\\ (e.g. assets\\\\myicon.png). Empty = use the built-in planet drawing.",
+
+  "showNms10Logo": true,
+  "_showNms10Logo": "Show the NMS10 logo beneath the top icon (true/false).",
+
+  "nms10Logo": "assets/nms10-logo.png",
+  "_nms10Logo": "Path/name of the NMS10 logo image. Ships in assets/.",
+
+  "scale": 1.0,
+  "_scale": "Size multiplier for the whole card, independent of screen DPI. 1.0 = default; 1.5 = 50% bigger; 0.8 = smaller.",
+
+  "corner": "TopLeft",
+  "_corner": "On-screen corner: TopLeft | TopRight | BottomRight | BottomLeft.",
+
+  "margin": 24,
+  "_margin": "Gap from the screen edge, in device-independent pixels.",
+
+  "monitor": -1,
+  "_monitor": "0-based display index to place the overlay on. -1 = primary monitor."
+}

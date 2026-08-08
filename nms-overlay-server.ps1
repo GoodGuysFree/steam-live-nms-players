@@ -31,7 +31,6 @@ $script:Low     = $null       # session trough since this server started
 $script:At      = [DateTime]::MinValue
 $script:Ok      = $false
 $script:Threshold      = $Threshold
-$script:ThreshApplied  = $false
 $script:WasAbove       = $false
 $script:CelebrateUntil = [DateTime]::MinValue
 
@@ -46,15 +45,6 @@ function Get-PlayerCount {
             $script:Ok    = $true
             if ($null -eq $script:High -or $script:Count -gt $script:High) { $script:High = $script:Count }
             if ($null -eq $script:Low  -or $script:Count -lt $script:Low ) { $script:Low  = $script:Count }
-
-            # --- TEST ONLY: on the first reading, drop the threshold to (value+1) so the
-            #     next uptick trips the fireworks. Delete this block for production. ---
-            if (-not $script:ThreshApplied) {
-                $script:Threshold = $script:Count + 1
-                $script:ThreshApplied = $true
-                Write-Host ("[TEST] fireworks threshold set to {0}" -f $script:Threshold) -ForegroundColor Magenta
-            }
-            # --- end TEST ---
 
             $above = $script:Count -gt $script:Threshold
             if ($above -and -not $script:WasAbove) {
