@@ -24,7 +24,9 @@
 
 param(
     [int]    $AppId          = 275850,      # 275850 = No Man's Sky
-    [int]    $RefreshSeconds = 480,         # 8 min (Steam only republishes this count ~every 14 min)
+    [int]    $ActivePollSeconds     = 60,   # cadence while fast-polling to catch the next change
+    [int]    $QuietMinutes          = 12,   # after the first read / a change, sit quiet this long
+    [int]    $ChangeIntervalMinutes = 14,   # Steam republishes ~every 14 min (drives the estimate)
     [ValidateSet('TopRight','TopLeft','BottomRight','BottomLeft')]
     [string] $Corner         = 'TopLeft',
     [int]    $Margin         = 24,          # gap from the screen edge (device-independent px)
@@ -71,6 +73,7 @@ $sync = [hashtable]::Synchronized(@{
     count = $null; high = $null; low = $null; ok = $false; at = [DateTime]::MinValue
     stop = $false; threshold = $Threshold; threshApplied = $false
     wasAbove = $false; record = $false; recordSeq = 0
+    nextPollAt = [DateTime]::MinValue; lastChangeAt = [DateTime]::MinValue
 })
 
 # --- background poller (own runspace so the UI never blocks on the network) -
@@ -79,13 +82,16 @@ $rs.ApartmentState = 'MTA'
 $rs.Open()
 $rs.SessionStateProxy.SetVariable('sync', $sync)
 $rs.SessionStateProxy.SetVariable('SteamUrl', $SteamUrl)
-$rs.SessionStateProxy.SetVariable('RefreshSeconds', $RefreshSeconds)
+$rs.SessionStateProxy.SetVariable('ActivePollSeconds', $ActivePollSeconds)
+$rs.SessionStateProxy.SetVariable('QuietMinutes', $QuietMinutes)
 $poller = [powershell]::Create()
 $poller.Runspace = $rs
 [void]$poller.AddScript({
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $prev = $null
+    $prev     = $null
+    $quietSec = $QuietMinutes * 60
     while (-not $sync.stop) {
+        $gotValue = $false; $changed = $false; $isFirst = $false
         try {
             $r = Invoke-RestMethod -Uri $SteamUrl -TimeoutSec 10
             if ($r.response -and $r.response.result -eq 1) {
@@ -106,10 +112,14 @@ $poller.Runspace = $rs
                 $sync.wasAbove = $above
                 $sync.record   = $above
 
+                if ($null -eq $prev)   { $isFirst = $true; $sync.lastChangeAt = [DateTime]::UtcNow }
+                elseif ($c -ne $prev)  { $changed = $true; $sync.lastChangeAt = [DateTime]::UtcNow }
+                $gotValue = $true
+
                 # echo every read to the console (Console.WriteLine, since Write-Host from a
                 # background runspace does not reach the console)
-                $tag = if ($null -eq $prev) { '  (first read)' }
-                       elseif ($c -ne $prev) { "  <-- CHANGED from $prev" }
+                $tag = if ($isFirst) { '  (first read)' }
+                       elseif ($changed) { "  <-- CHANGED from $prev" }
                        else { '  (unchanged)' }
                 [Console]::WriteLine(("[{0}] Steam: {1,7:N0}   high {2:N0} / low {3:N0}{4}" -f (Get-Date -Format 'HH:mm:ss'), $c, [int]$sync.high, [int]$sync.low, $tag))
                 $prev = $c
@@ -120,8 +130,14 @@ $poller.Runspace = $rs
         } catch {
             [Console]::WriteLine(("[{0}] Steam read FAILED: {1}" -f (Get-Date -Format 'HH:mm:ss'), $_.Exception.Message))
         }
+
+        # adaptive cadence: after the first read or a change, sit quiet (the count only
+        # moves ~every 14 min); otherwise fast-poll to catch the next change quickly.
+        if ($gotValue -and ($isFirst -or $changed)) { $sleepSec = $quietSec } else { $sleepSec = $ActivePollSeconds }
+        $sync.nextPollAt = [DateTime]::UtcNow.AddSeconds($sleepSec)
+        [Console]::WriteLine(("           next poll in {0}s" -f $sleepSec))
         $slept = 0
-        while ($slept -lt $RefreshSeconds -and -not $sync.stop) { Start-Sleep -Seconds 1; $slept++ }
+        while ($slept -lt $sleepSec -and -not $sync.stop) { Start-Sleep -Seconds 1; $slept++ }
     }
 })
 [void]$poller.BeginInvoke()
@@ -164,16 +180,21 @@ $poller.Runspace = $rs
           <TextBlock x:Name="Lo" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="17"
                      FontWeight="SemiBold" FontFamily="Segoe UI" VerticalAlignment="Center"/>
         </StackPanel>
+        <TextBlock FontFamily="Segoe UI" FontSize="11" Margin="0,7,0,0">
+          <Run Foreground="#FFD84D">Next poll: </Run><Run x:Name="NextPoll" Foreground="White">&#8212;</Run><Run Foreground="#FFD84D"> min</Run><Run Foreground="#FFD84D">    &#183;    Est. next change: </Run><Run x:Name="EstChange" Foreground="White">&#8212;</Run><Run Foreground="#FFD84D"> min</Run><Run Foreground="#FFD84D" FontSize="9">    (GGF)</Run>
+        </TextBlock>
       </StackPanel>
     </StackPanel>
   </Border>
 </Window>
 '@
 $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
-$num = $win.FindName('Num')
-$dot = $win.FindName('Dot')
-$hi  = $win.FindName('Hi')
-$lo  = $win.FindName('Lo')
+$num       = $win.FindName('Num')
+$dot       = $win.FindName('Dot')
+$hi        = $win.FindName('Hi')
+$lo        = $win.FindName('Lo')
+$nextPoll  = $win.FindName('NextPoll')
+$estChange = $win.FindName('EstChange')
 
 # --- brushes + record glow --------------------------------------------------
 $bc = [Windows.Media.BrushConverter]::new()
@@ -332,42 +353,55 @@ $win.Add_ContentRendered({
 })
 
 # --- UI refresh (reads cached values only -- no network on the UI thread) ---
-$script:shown = $null
-$script:lastSeq = 0
+$script:lastSeq      = 0
+$script:fxDelayTimer = $null
 $timer = New-Object System.Windows.Threading.DispatcherTimer
-$timer.Interval = [TimeSpan]::FromMilliseconds(400)
+$timer.Interval = [TimeSpan]::FromSeconds(2)           # render the first values quickly...
 $timer.Add_Tick({
-    if (-not $sync.ok -or $null -eq $sync.count) { return }
-    $target = [int]$sync.count
+    $timer.Interval = [TimeSpan]::FromSeconds(10)      # ...then redraw every 10s
+    $now = [DateTime]::UtcNow
 
-    # smooth roll toward the latest value
-    if ($null -eq $script:shown) { $script:shown = $target }
-    elseif ($script:shown -ne $target) {
-        $step = [int](($target - $script:shown) * 0.35)
-        if ([math]::Abs($target - $script:shown) -le 2 -or $step -eq 0) { $script:shown = $target }
-        else { $script:shown += $step }
+    if ($sync.ok -and $null -ne $sync.count) {
+        $target = [int]$sync.count
+        $num.Text = '{0:N0}' -f $target
+        if ($null -ne $sync.high) { $hi.Text = '{0:N0}' -f [int]$sync.high }
+        if ($null -ne $sync.low ) { $lo.Text = '{0:N0}' -f [int]$sync.low }
+
+        # colour: green at the high, yellow at the low, white otherwise
+        if     ($null -ne $sync.high -and $target -eq [int]$sync.high) { $num.Foreground = $brushGreen }
+        elseif ($null -ne $sync.low  -and $target -eq [int]$sync.low -and [int]$sync.high -gt [int]$sync.low) { $num.Foreground = $brushYellow }
+        else   { $num.Foreground = $brushWhite }
+
+        # record glow on current + high
+        if ($sync.record -eq $true) { $num.Effect = $glow; $hi.Effect = $glow }
+        else { $num.Effect = $null; $hi.Effect = $null }
+
+        # dot: live vs stale (no successful read for a while)
+        $stale = (($now - $sync.at).TotalMinutes -gt ($QuietMinutes + 6))
+        $dot.Fill = if ($stale) { $brushRed } else { $brushGreen }
     }
-    $num.Text = '{0:N0}' -f $script:shown
-    if ($null -ne $sync.high) { $hi.Text = '{0:N0}' -f [int]$sync.high }
-    if ($null -ne $sync.low ) { $lo.Text = '{0:N0}' -f [int]$sync.low }
 
-    # colour: green at the high, yellow at the low, white otherwise
-    if     ($null -ne $sync.high -and $target -eq [int]$sync.high) { $num.Foreground = $brushGreen }
-    elseif ($null -ne $sync.low  -and $target -eq [int]$sync.low -and [int]$sync.high -gt [int]$sync.low) { $num.Foreground = $brushYellow }
-    else   { $num.Foreground = $brushWhite }
+    # countdown line: minutes until the next poll, and until the next likely change
+    if ($sync.nextPollAt -ne [DateTime]::MinValue) {
+        $nextPoll.Text = "$([int][math]::Max(0, [math]::Ceiling(($sync.nextPollAt - $now).TotalSeconds / 60.0)))"
+    }
+    if ($sync.lastChangeAt -ne [DateTime]::MinValue) {
+        $due = $sync.lastChangeAt.AddMinutes($ChangeIntervalMinutes)
+        $estChange.Text = "$([int][math]::Max(0, [math]::Ceiling(($due - $now).TotalSeconds / 60.0)))"
+    }
 
-    # record glow on current + high
-    if ($sync.record -eq $true) { $num.Effect = $glow; $hi.Effect = $glow }
-    else { $num.Effect = $null; $hi.Effect = $null }
-
-    # dot: live vs stale
-    $stale = (([DateTime]::UtcNow - $sync.at).TotalSeconds -gt ($RefreshSeconds * 3))
-    $dot.Fill = if ($stale) { $brushRed } else { $brushGreen }
-
-    # fire the fireworks once per record crossing
+    # fireworks: fire a short beat AFTER the new number is on screen (set above this tick)
     if ([int]$sync.recordSeq -ne $script:lastSeq) {
         $script:lastSeq = [int]$sync.recordSeq
-        if ([int]$sync.recordSeq -gt 0) { Start-Fireworks }
+        if ([int]$sync.recordSeq -gt 0) {
+            if ($null -eq $script:fxDelayTimer) {
+                $script:fxDelayTimer = New-Object System.Windows.Threading.DispatcherTimer
+                $script:fxDelayTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
+                $script:fxDelayTimer.Add_Tick({ $script:fxDelayTimer.Stop(); Start-Fireworks })
+            }
+            $script:fxDelayTimer.Stop()
+            $script:fxDelayTimer.Start()
+        }
     }
 })
 $timer.Start()
