@@ -180,9 +180,7 @@ $poller.Runspace = $rs
           <TextBlock x:Name="Lo" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="17"
                      FontWeight="SemiBold" FontFamily="Segoe UI" VerticalAlignment="Center"/>
         </StackPanel>
-        <TextBlock FontFamily="Segoe UI" FontSize="11" Margin="0,7,0,0">
-          <Run Foreground="#FFD84D">Next poll: </Run><Run x:Name="NextPoll" Foreground="White">&#8212;</Run><Run Foreground="#FFD84D"> min</Run><Run Foreground="#FFD84D">    &#183;    Est. next change: </Run><Run x:Name="EstChange" Foreground="White">&#8212;</Run><Run Foreground="#FFD84D"> min</Run><Run Foreground="#FFD84D" FontSize="9">    (GGF)</Run>
-        </TextBlock>
+        <TextBlock FontFamily="Segoe UI" FontSize="11" Margin="0,8,0,0" xml:space="preserve"><Run Foreground="#FFD84D">Next poll:  </Run><Run x:Name="NextPoll" Foreground="White">&#8212;</Run><Run Foreground="#FFD84D">m        Est. next change:  </Run><Run x:Name="EstChange" Foreground="White">&#8212;</Run><Run Foreground="#FFD84D">m</Run></TextBlock>
       </StackPanel>
     </StackPanel>
   </Border>
