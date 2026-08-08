@@ -24,7 +24,7 @@
 
 param(
     [int]    $AppId          = 275850,      # 275850 = No Man's Sky
-    [int]    $RefreshSeconds = 300,         # Steam caches the count ~5 min; no point polling faster
+    [int]    $RefreshSeconds = 60,          # how often to hit Steam (matches the OBS server default)
     [ValidateSet('TopRight','TopLeft','BottomRight','BottomLeft')]
     [string] $Corner         = 'TopLeft',
     [int]    $Margin         = 24,          # gap from the screen edge (device-independent px)
