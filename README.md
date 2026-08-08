@@ -138,4 +138,4 @@ official Hello Games asset).
 
 ## License
 
-[MIT](LICENSE) © 2026 Amit Margalit
+[MIT](LICENSE) © 2026 GoodGuysFree (Amit Margalit)

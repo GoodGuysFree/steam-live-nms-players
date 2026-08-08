@@ -13,6 +13,9 @@
   "scale": 1.0,
   "_scale": "Size multiplier for the whole card, independent of screen DPI. 1.0 = default; 1.5 = 50% bigger; 0.8 = smaller.",
 
+  "iconOpacity": 1.0,
+  "_iconOpacity": "Opacity of the stacked icons (top icon + NMS10 logo). 1.0 = solid, 0.5 = half-transparent, 0.0 = invisible.",
+
   "corner": "TopLeft",
   "_corner": "On-screen corner: TopLeft | TopRight | BottomRight | BottomLeft.",
 

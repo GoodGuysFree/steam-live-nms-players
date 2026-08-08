@@ -43,6 +43,7 @@ $IconPath   = ''                       # top icon path/name; empty -> built-in p
 $ShowNms10  = $true                    # show the NMS10 logo beneath the top icon
 $Nms10Path  = 'assets/nms10-logo.png'  # path/name of that logo (kept out of the public repo)
 $Scale      = 1.0                      # size multiplier for the whole card (DPI-independent)
+$IconOpacity = 1.0                     # 0.0 (invisible) .. 1.0 (solid) for the stacked icons
 $cfgFile = Join-Path $ScriptDir 'overlay-config.json'
 if (Test-Path -LiteralPath $cfgFile) {
     try {
@@ -50,7 +51,8 @@ if (Test-Path -LiteralPath $cfgFile) {
         if ($null -ne $cfg.icon)          { $IconPath  = [string]$cfg.icon }
         if ($null -ne $cfg.showNms10Logo) { $ShowNms10 = [bool]$cfg.showNms10Logo }
         if ($null -ne $cfg.nms10Logo)     { $Nms10Path = [string]$cfg.nms10Logo }
-        if ($null -ne $cfg.scale)         { $Scale     = [double]$cfg.scale }
+        if ($null -ne $cfg.scale)         { $Scale       = [double]$cfg.scale }
+        if ($null -ne $cfg.iconOpacity)   { $IconOpacity = [double]$cfg.iconOpacity }
         if ($null -ne $cfg.corner  -and -not $PSBoundParameters.ContainsKey('Corner'))  { $Corner  = [string]$cfg.corner }
         if ($null -ne $cfg.margin  -and -not $PSBoundParameters.ContainsKey('Margin'))  { $Margin  = [int]$cfg.margin }
         if ($null -ne $cfg.monitor -and -not $PSBoundParameters.ContainsKey('Monitor')) { $Monitor = [int]$cfg.monitor }
@@ -255,6 +257,8 @@ if ($Nms10Abs) {
         $nms10Icon.Visibility = [System.Windows.Visibility]::Visible
     } catch { Write-Host "  (config: could not load NMS10 logo '$Nms10Abs': $($_.Exception.Message))" -ForegroundColor DarkYellow }
 }
+# icon opacity (applies to whichever top icon is showing, plus the NMS10 logo)
+foreach ($el in @($planetIcon, $topIcon, $nms10Icon)) { if ($el) { $el.Opacity = $IconOpacity } }
 # overall size multiplier (independent of screen DPI/resolution)
 if ($Scale -ne 1.0) { $cardRoot.LayoutTransform = New-Object System.Windows.Media.ScaleTransform($Scale, $Scale) }
 
