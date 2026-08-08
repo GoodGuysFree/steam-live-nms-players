@@ -46,7 +46,7 @@ public static class Native {
 [void][Native]::SetProcessDPIAware()
 
 # --- shared state, written by the background poller ------------------------
-$sync = [hashtable]::Synchronized(@{ count = $null; ok = $false; at = [DateTime]::MinValue; stop = $false })
+$sync = [hashtable]::Synchronized(@{ count = $null; high = $null; low = $null; ok = $false; at = [DateTime]::MinValue; stop = $false })
 
 # --- background poller (own runspace so the UI never blocks on the network) -
 $rs = [runspacefactory]::CreateRunspace()
@@ -63,9 +63,12 @@ $poller.Runspace = $rs
         try {
             $r = Invoke-RestMethod -Uri $SteamUrl -TimeoutSec 10
             if ($r.response -and $r.response.result -eq 1) {
-                $sync.count = [int]$r.response.player_count
+                $c = [int]$r.response.player_count
+                $sync.count = $c
                 $sync.ok    = $true
                 $sync.at    = [DateTime]::UtcNow
+                if ($null -eq $sync.high -or $c -gt $sync.high) { $sync.high = $c }
+                if ($null -eq $sync.low  -or $c -lt $sync.low ) { $sync.low  = $c }
             }
         } catch { }
         $slept = 0
@@ -102,8 +105,16 @@ $poller.Runspace = $rs
         </StackPanel>
         <TextBlock x:Name="Num" Text="&#8212;" Foreground="White" FontSize="30"
                    FontWeight="Bold" FontFamily="Segoe UI"/>
-        <TextBlock x:Name="Sub" Text="live on Steam" Foreground="#8CFFFFFF"
-                   FontSize="11" Margin="0,4,0,0" FontFamily="Segoe UI"/>
+        <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+          <TextBlock Text="&#9650; HIGH " Foreground="#7FD48F" FontSize="12"
+                     FontWeight="Bold" FontFamily="Segoe UI"/>
+          <TextBlock x:Name="Hi" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="12"
+                     FontWeight="SemiBold" FontFamily="Segoe UI" Margin="0,0,12,0"/>
+          <TextBlock Text="&#9660; LOW " Foreground="#E79A94" FontSize="12"
+                     FontWeight="Bold" FontFamily="Segoe UI"/>
+          <TextBlock x:Name="Lo" Text="&#8212;" Foreground="#D9FFFFFF" FontSize="12"
+                     FontWeight="SemiBold" FontFamily="Segoe UI"/>
+        </StackPanel>
       </StackPanel>
     </StackPanel>
   </Border>
@@ -113,7 +124,8 @@ $poller.Runspace = $rs
 $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
 $num = $win.FindName('Num')
 $dot = $win.FindName('Dot')
-$sub = $win.FindName('Sub')
+$hi  = $win.FindName('Hi')
+$lo  = $win.FindName('Lo')
 
 $brushGreen = [Windows.Media.BrushConverter]::new().ConvertFromString('#4EE06A')
 $brushRed   = [Windows.Media.BrushConverter]::new().ConvertFromString('#E0574E')
@@ -163,9 +175,10 @@ $timer.Add_Tick({
         else { $script:shown += $step }
     }
     $num.Text = '{0:N0}' -f $script:shown
+    if ($null -ne $sync.high) { $hi.Text = '{0:N0}' -f [int]$sync.high }
+    if ($null -ne $sync.low ) { $lo.Text = '{0:N0}' -f [int]$sync.low }
     $stale = (([DateTime]::UtcNow - $sync.at).TotalSeconds -gt ($RefreshSeconds * 3))
     $dot.Fill = if ($stale) { $brushRed } else { $brushGreen }
-    $sub.Text = if ($stale) { 'live on Steam (reconnecting)' } else { 'live on Steam' }
 })
 $timer.Start()
 

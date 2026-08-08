@@ -25,6 +25,8 @@ $SteamUrl = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlay
 
 # ---- cache -----------------------------------------------------------------
 $script:Count   = $null
+$script:High    = $null       # session peak since this server started
+$script:Low     = $null       # session trough since this server started
 $script:At      = [DateTime]::MinValue
 $script:Ok      = $false
 
@@ -37,6 +39,8 @@ function Get-PlayerCount {
             $script:Count = [int]$resp.response.player_count
             $script:At    = [DateTime]::UtcNow
             $script:Ok    = $true
+            if ($null -eq $script:High -or $script:Count -gt $script:High) { $script:High = $script:Count }
+            if ($null -eq $script:Low  -or $script:Count -lt $script:Low ) { $script:Low  = $script:Count }
         }
     } catch {
         # keep last known good value; mark stale only if we never had one
@@ -77,8 +81,13 @@ $Html = @'
   #num{ font-size:34px; font-weight:800; color:#fff; letter-spacing:.01em;
         font-variant-numeric:tabular-nums;
         text-shadow:0 1px 2px rgba(0,0,0,.6); }
-  #sub{ font-size:11px; color:rgba(255,255,255,.55); margin-top:5px;
-        letter-spacing:.04em; }
+  #hilo{ font-size:12px; margin-top:6px; color:rgba(255,255,255,.62);
+         font-variant-numeric:tabular-nums; letter-spacing:.03em;
+         display:flex; gap:12px; }
+  #hilo .k{ font-weight:700; margin-right:3px; }
+  #hilo .hi .k{ color:#7fd48f; }
+  #hilo .lo .k{ color:#e79a94; }
+  #hilo b{ color:rgba(255,255,255,.85); font-weight:600; }
 </style>
 </head>
 <body>
@@ -92,15 +101,21 @@ $Html = @'
     <div id="text">
       <div id="label"><span id="dot"></span>Players Online &middot; No Man's Sky</div>
       <div id="num">&mdash;</div>
-      <div id="sub">live on Steam</div>
+      <div id="hilo">
+        <span class="hi"><span class="k">&#9650; HIGH</span><b id="hi">&mdash;</b></span>
+        <span class="lo"><span class="k">&#9660; LOW</span><b id="lo">&mdash;</b></span>
+      </div>
     </div>
   </div>
 
 <script>
   var numEl = document.getElementById('num');
   var dotEl = document.getElementById('dot');
-  var subEl = document.getElementById('sub');
+  var hiEl  = document.getElementById('hi');
+  var loEl  = document.getElementById('lo');
   var shown = 0;
+
+  function fmt(n){ return (typeof n === 'number') ? n.toLocaleString('en-US') : '—'; }
 
   function animateTo(target){
     var start = shown, t0 = null, dur = 700;
@@ -121,8 +136,9 @@ $Html = @'
       .then(function(d){
         if(d && d.ok && typeof d.count === 'number'){
           animateTo(d.count);
+          hiEl.textContent = fmt(d.high);
+          loEl.textContent = fmt(d.low);
           dotEl.classList.toggle('stale', d.stale === true);
-          subEl.textContent = d.stale ? 'live on Steam (reconnecting)' : 'live on Steam';
         } else {
           dotEl.classList.add('stale');
         }
@@ -153,7 +169,7 @@ try {
 Write-Host ""
 Write-Host "  No Man's Sky live-players overlay is running." -ForegroundColor Green
 Write-Host "  In OBS: add a Browser Source ->  $prefix" -ForegroundColor Cyan
-Write-Host "  (suggested size: 360 x 90)" -ForegroundColor DarkGray
+Write-Host "  (suggested size: 380 x 118)" -ForegroundColor DarkGray
 Write-Host "  Press Ctrl+C in this window to stop." -ForegroundColor DarkGray
 Write-Host ""
 
@@ -178,6 +194,8 @@ try {
                 $payload = @{
                     ok    = [bool]$script:Ok
                     count = $script:Count
+                    high  = $script:High
+                    low   = $script:Low
                     stale = [bool]$stale
                 } | ConvertTo-Json -Compress
                 $bytes = [Text.Encoding]::UTF8.GetBytes($payload)

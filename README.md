@@ -32,7 +32,7 @@ local server        ->  api.steampowered.com           (the only outbound call)
 
 1. Double-click **`Start-NMS-Overlay.cmd`**. A console window opens and stays open — that's the
    server. Leave it running while you record.
-2. In OBS: **Sources → + → Browser Source → new**. URL `http://localhost:9011/`, size `360 × 90`.
+2. In OBS: **Sources → + → Browser Source → new**. URL `http://localhost:9011/`, size `380 × 118`.
 3. Position it in your scene. Stop it by closing the console window (or **Ctrl+C**).
 
 **Options**
@@ -93,6 +93,8 @@ Discord has two share modes and they behave differently:
 ## Notes
 
 - Backgrounds are transparent — only the panel shows over your game.
+- **HIGH / LOW** are the session peak and trough — the highest and lowest counts seen since you
+  started the overlay. They reset when you restart it.
 - A dot shows live (green) vs. stale/reconnecting (red); the last known number stays on screen
   if Steam can't be reached.
 - Steam caches the count for ~5 minutes, so the number won't change faster than that no matter
